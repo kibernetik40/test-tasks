@@ -1,0 +1,142 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app-deployment
+  labels:
+    app: web-app
+spec:
+  replicas: 4  # Четыре пода для справления с пиковой нагрузкой
+  selector:
+    matchLabels:
+      app: web-app
+  template:
+    metadata:
+      labels:
+        app: web-app
+    spec:
+      containers:
+        - name: web-app
+          image: your-image:latest  # Укажите ваш образ приложения
+          resources:
+            requests:
+              memory: "128Mi"  # Запрашиваемая память - всегда около 128М
+              cpu: "0.1"  # Потребление процессора в нормальном режиме
+            limits:
+              memory: "256Mi"  # Лимит по памяти для случая пиковой нагрузки
+              cpu: "1"  # Лимит процессора на случай пиковой нагрузки
+          livenessProbe:
+            httpGet:
+              path: /healthz  # Проверка живости
+              port: 8080
+            initialDelaySeconds: 10  # Задержка перед первой проверкой живости
+            periodSeconds: 20  # Частота проверки живости
+          readinessProbe:
+            httpGet:
+              path: /readiness  # Проверка готовности
+              port: 8080
+            initialDelaySeconds: 20  # Задержка перед первой проверкой готовности
+            periodSeconds: 20  # Частота проверки готовности
+          startupProbe:
+            httpGet:
+              path: /startup  # Проба на стартап (если приложение долго инициализируется)
+              port: 8080
+            failureThreshold: 60  # В случае неудачи ждем до 60 секунд
+            periodSeconds: 5  # Проверки каждые 5 секунд
+            initialDelaySeconds: 5  # Начальная задержка перед проверкой
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: web-app-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: web-app-deployment
+  minReplicas: 2  # Минимальное количество подов для экономии ресурсов ночью
+  maxReplicas: 6  # Максимальное количество подов для обработки пикового трафика
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        targetAverageUtilization: 50  # Скалирование по CPU, если нагрузка превышает 50%
+    - type: Resource
+      resource:
+        name: memory
+        targetAverageUtilization: 50  # Скалирование по памяти, если нагрузка превышает 50%
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-app-service
+spec:
+  selector:
+    app: web-app
+  ports:
+    - protocol: TCP
+      port: 80  # Публичный порт
+      targetPort: 8080  # Порт приложения
+  type: ClusterIP  # Стандартный сервис Kubernetes для внутреннего использования
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web-app-ingress
+spec:
+  rules:
+    - host: your-domain.com  # Укажите ваш домен
+      http:
+        paths:
+          - path: /  # Путь для приложения
+            pathType: Prefix
+            backend:
+              service:
+                name: web-app-service
+                port:
+                  number: 80
+
+---
+apiVersion: storage.k8s.io/v1
+kind: StatefulSet
+metadata:
+  name: web-app-statefulset
+spec:
+  serviceName: "web-app-service"
+  replicas: 4  # Репликации для отказоустойчивости
+  selector:
+    matchLabels:
+      app: web-app
+  template:
+    metadata:
+      labels:
+        app: web-app
+    spec:
+      containers:
+        - name: web-app
+          image: your-image:latest  # Образ приложения
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: web-app-storage
+              mountPath: /data  # Монтируем хранилище для данных, если нужно
+      volumes:
+        - name: web-app-storage
+          persistentVolumeClaim:
+            claimName: web-app-pvc  # Убедитесь, что PVC создан заранее
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: web-app-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi  # Запрос на хранилище (при необходимости)
+
